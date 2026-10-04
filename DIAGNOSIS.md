@@ -238,3 +238,30 @@ SELECT ord, id, json, time FROM hist_song ORDER BY ord DESC LIMIT 1;
 - 姣?800ms 閲囨牱涓€娆?time-pos锛涗笌涓婃宸€?> 0.05s 瑙嗕负"鏈夎繘灞?骞惰褰曟椂闂?- 杩炵画 **2.5 绉?*鏃犺繘灞?鈫?`Paused`锛屽惁鍒?`Playing`
 - 瀹瑰樊澶皬浼氭姈鍔紙鍋跺彂璇诲け璐ヤ細琚鍒や负鏆傚仠锛夛紝2.5s 瀹炴祴绋冲畾
 
+
+---
+
+## 四点十一、让媒体卡片显示「波点音乐」（而不是「未知应用」）
+
+媒体卡片上的应用名来自创建会话的**进程的 AppUserModelID**，默认是 `powershell.exe`。
+
+1. **设置进程 AUMID**
+   `SetCurrentProcessExplicitAppUserModelID("Tencent.BodianMusic.PC")`，必须在创建任何窗口之前调用。
+   调用后 SMTC 会话的 AUMID 立刻变成该值（可用 `verify_session.ps1` 验证）。
+2. **只写注册表 DisplayName 不够**
+   `HKCU\SOFTWARE\Classes\AppUserModelId\<id>\DisplayName = 波点音乐` 写对了、
+   重启 explorer 也没用，Windows 媒体卡片**依旧显示「未知应用」**。
+3. **真正生效的是开始菜单快捷方式**（最后成功的那一步）
+   创建一个快捷方式，把它的 `PKEY_AppUserModel_ID`
+   （`{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, 5`）设为同一个 AUMID、文件名取「波点音乐」，
+   媒体卡片随即显示「波点音乐」。shell 解析 AUMID 显示名时优先查开始菜单快捷方式 ——
+   这正是"固定到任务栏"的应用能显示正确名字的机制。**删除该 .lnk 会退回「未知应用」**。
+   实现用 `IShellLink` + `IPropertyStore`（PowerShell 无法通过 WScript.Shell 写 .lnk 的属性存储）。
+4. **中文要用码点构造**
+   `[char]0x6CE2 + [char]0x70B9 + [char]0x97F3 + [char]0x4E50`
+   因为脚本以 UTF-8 **无 BOM** 保存时，PS 5.1 会把中文字面量按 ANSI 解码成乱码
+   （对方项目 BodianSMTCPlugin 的 README 也专门警告过这一点）。
+
+> 施工提醒：往 PowerShell 脚本里插入代码时**不要用 `-replace` 拼接含 `$` 的文本** ——
+> `-replace` 会把替换串里的 `$_`、`$script:...` 当成**替换模式**展开，曾一次性把整个脚本写坏
+> （文件从 26KB 膨胀到 79KB、内容自我嵌套）。改用 `String.Replace()`（不求值）。

@@ -1,29 +1,12 @@
-# Bodian Music -> SMTC bridge (v2)
+# Bodian Music -> SMTC bridge
 #
-# Bodian's Windows client (bodian_pc.exe, a Flutter app using media_kit/libmpv)
-# never publishes an SMTC media session, so NO SMTC client can see it -- not Windows'
-# own media flyout, not Lyricify, not taskbar-lyric tools, not Discord RPC bridges.
+# Bodian's Windows client (bodian_pc.exe, a Flutter app using media_kit/libmpv) never
+# publishes an SMTC media session, so NO SMTC client can see it -- not Windows' own
+# media flyout, not Lyricify, not taskbar-lyric tools, not Discord RPC bridges.
 #
-# This script publishes a real SMTC session in its own process and feeds it what
-# Bodian is actually doing. Lyricify Fusion is just one verified consumer; anything
-# that reads SMTC gets the same data.
-#
-# How it works:
-#   1. A WinRT MediaPlayer plays a 4-item playlist of SILENT in-memory wavs.
-#      Playing real audio is what makes Windows treat this session as the active
-#      media source; using a playlist (not a single item) is what lets us observe
-#      media-control button presses.
-#   2. CommandManager is enabled, so MediaPlayer itself handles the SMTC transport
-#      buttons (Next/Previous/Play/Pause) -- we do NOT need to subscribe any WinRT
-#      event (which PowerShell cannot do).
-#   3. When a button is pressed, the playlist advances: CurrentItemIndex changes and
-#      the position resets. We poll that and forward the press to Bodian as a
-#      synthetic media key (Bodian listens to media keys).
-#   4. The session is fed with what Bodian is actually doing:
-#        - track metadata <- songDB.db (table hist_song, newest row)
-#        - position       <- mpv time-pos read from bodian_pc process memory
-#      Because CommandManager owns the session, it overwrites our metadata, so we
-#      re-assert Title/Artist/Album on every tick.
+# This script publishes a real SMTC session in its own process and feeds it what Bodian
+# is actually doing. Lyricify Fusion is just one verified consumer; anything that reads
+# SMTC gets the same data.
 #
 # Run with Windows PowerShell 5.1 (STA), NOT PowerShell 7.
 
@@ -38,6 +21,19 @@ if (-not $script:bridgeMutex.WaitOne(0)) {
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
+
+# ---- friendly identity ------------------------------------------------------------
+# The SMTC session inherits this process's AppUserModelID, so without this the media
+# flyout says "powershell.exe" / "unknown app". Must be set before any window exists.
+$script:MY_AUMID = "Tencent.BodianMusic.PC"
+Add-Type -Language CSharp -TypeDefinition @"
+using System.Runtime.InteropServices;
+public static class AppId {
+  [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
+}
+"@
+try { [void][AppId]::SetCurrentProcessExplicitAppUserModelID($script:MY_AUMID) } catch { }
 
 Add-Type -Language CSharp -TypeDefinition @"
 using System;
@@ -66,8 +62,8 @@ public static class BodianBridge {
   [StructLayout(LayoutKind.Sequential)] public struct INPUT { public uint type; public InputUnion u; }
   [DllImport("user32.dll", SetLastError=true)] static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
-  // Media keys are EXTENDED keys: without KEYEVENTF_EXTENDEDKEY (0x0001) Bodian
-  // ignores them entirely.
+  // Media keys are EXTENDED keys: without KEYEVENTF_EXTENDEDKEY (0x0001) Bodian ignores
+  // them entirely.
   public static uint MediaKey(ushort vk) {
     INPUT[] ins = new INPUT[2];
     ins[0].type = 1; ins[0].u.ki.wVk = vk; ins[0].u.ki.dwFlags = 0x0001;
@@ -78,9 +74,8 @@ public static class BodianBridge {
   [UnmanagedFunctionPointer(CallingConvention.StdCall)] delegate int AppendFn(IntPtr self, IntPtr item);
 
   // MediaPlaybackList.Items is a WinRT generic collection (IVector<MediaPlaybackItem>)
-  // which PowerShell cannot call Add/Append on (unprojected System.__ComObject).
-  // We QI it by IID and call Append through the vtable (index 13). The IID below was
-  // determined empirically by probing the object's IInspectable::GetIids list.
+  // that PowerShell cannot call Add/Append on (unprojected System.__ComObject). We QI it
+  // by IID and call Append through the vtable (index 13).
   public static string PlaylistAppend(object items, object item) {
     IntPtr p = IntPtr.Zero;
     try {
@@ -92,10 +87,8 @@ public static class BodianBridge {
       IntPtr vtbl = Marshal.ReadIntPtr(p);
       var append = (AppendFn)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vtbl, 13 * IntPtr.Size), typeof(AppendFn));
       IntPtr pItem = Marshal.GetIUnknownForObject(item);
-      try {
-        int hr2 = append(p, pItem);
-        return "hr=0x" + hr2.ToString("X8");
-      } finally { Marshal.Release(pItem); }
+      try { int hr2 = append(p, pItem); return "hr=0x" + hr2.ToString("X8"); }
+      finally { Marshal.Release(pItem); }
     } catch (Exception ex) { return "EX " + ex.Message; }
     finally { if (p != IntPtr.Zero) { try { Marshal.Release(p); } catch { } } }
   }
@@ -165,8 +158,118 @@ public static class BodianBridge {
 "@
 
 $log = Join-Path $env:TEMP "bodian_bridge.log"
-Set-Content -LiteralPath $log -Value ("bridge v2 start " + (Get-Date -Format "HH:mm:ss")) -Encoding UTF8
+Set-Content -LiteralPath $log -Value ("bridge start " + (Get-Date -Format "HH:mm:ss")) -Encoding UTF8
 function Log([string]$m) { try { [System.IO.File]::AppendAllText($log, $m + "`r`n") } catch { } }
+
+# ---- register a friendly display name for our AppUserModelID (HKCU, no admin) ----
+# Chinese is built from code points: a PS 5.1 script saved as UTF-8 without BOM would
+# decode a Chinese literal as ANSI garbage.
+$script:DISPLAY_NAME = [string]([char]0x6CE2 + [char]0x70B9 + [char]0x97F3 + [char]0x4E50)
+try {
+  $aumidKey = "HKCU:\SOFTWARE\Classes\AppUserModelId\$($script:MY_AUMID)"
+  if (-not (Test-Path $aumidKey)) { New-Item -Path $aumidKey -Force | Out-Null }
+  Set-ItemProperty -Path $aumidKey -Name "DisplayName" -Value $script:DISPLAY_NAME -ErrorAction SilentlyContinue
+  Log ("AUMID display name registered for " + $script:MY_AUMID)
+} catch { Log ("AUMID register ERR: " + $_.Exception.Message) }
+
+# ---- Start Menu shortcut carrying our AppUserModelID ------------------------------
+# Registering the registry DisplayName alone was NOT enough (the Windows media flyout
+# still said "unknown app"). The shell resolves an AUMID to a display name by looking up
+# a Start Menu shortcut whose PKEY_AppUserModel_ID matches, so we create one.
+Add-Type -Language CSharp -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class ShortcutAumid {
+  [ComImport, Guid("00021401-0000-0000-C000-000000000046")] class ShellLinkCoClass { }
+
+  [ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IShellLinkW {
+    void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszFile, int cch, IntPtr pfd, int fFlags);
+    void GetIDList(out IntPtr ppidl);
+    void SetIDList(IntPtr pidl);
+    void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszName, int cch);
+    void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+    void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszDir, int cch);
+    void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+    void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszArgs, int cch);
+    void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+    void GetHotkey(out short pwHotkey);
+    void SetHotkey(short wHotkey);
+    void GetShowCmd(out int piShowCmd);
+    void SetShowCmd(int iShowCmd);
+    void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszIconPath, int cch, out int piIcon);
+    void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+    void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, int dwReserved);
+    void Resolve(IntPtr hwnd, int fFlags);
+    void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+  }
+
+  [ComImport, Guid("0000010b-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IPersistFile {
+    void GetClassID(out Guid pClassID);
+    void IsDirty();
+    void Load([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, uint dwMode);
+    void Save([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, bool fRemember);
+    void SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string pszFileName);
+    void GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string ppszFileName);
+  }
+
+  [StructLayout(LayoutKind.Sequential, Pack = 4)]
+  struct PROPERTYKEY { public Guid fmtid; public uint pid; }
+
+  [StructLayout(LayoutKind.Explicit)]
+  struct PROPVARIANT { [FieldOffset(0)] public ushort vt; [FieldOffset(8)] public IntPtr p; }
+
+  [ComImport, Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IPropertyStore {
+    void GetCount(out uint cProps);
+    void GetAt(uint iProp, out PROPERTYKEY pkey);
+    void GetValue(ref PROPERTYKEY key, out PROPVARIANT pv);
+    void SetValue(ref PROPERTYKEY key, ref PROPVARIANT pv);
+    void Commit();
+  }
+
+  [DllImport("ole32.dll")] static extern int PropVariantClear(ref PROPVARIANT pv);
+
+  public static string Create(string lnkPath, string target, string arguments, string workingDir, string aumid, string iconPath) {
+    object linkObj = null;
+    try {
+      linkObj = new ShellLinkCoClass();
+      var link = (IShellLinkW)linkObj;
+      link.SetPath(target);
+      if (!string.IsNullOrEmpty(arguments)) link.SetArguments(arguments);
+      if (!string.IsNullOrEmpty(workingDir)) link.SetWorkingDirectory(workingDir);
+      if (!string.IsNullOrEmpty(iconPath)) link.SetIconLocation(iconPath, 0);
+
+      var store = (IPropertyStore)linkObj;
+      var key = new PROPERTYKEY();
+      key.fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3");
+      key.pid = 5;
+      var pv = new PROPVARIANT();
+      pv.vt = 31;
+      pv.p = Marshal.StringToCoTaskMemUni(aumid);
+      try { store.SetValue(ref key, ref pv); store.Commit(); }
+      finally { PropVariantClear(ref pv); }
+
+      ((IPersistFile)linkObj).Save(lnkPath, true);
+      return "ok";
+    } catch (Exception ex) { return "ERR " + ex.Message; }
+    finally { if (linkObj != null) { try { Marshal.ReleaseComObject(linkObj); } catch { } } }
+  }
+}
+"@
+try {
+  $programs = [Environment]::GetFolderPath('Programs')
+  $lnkPath = Join-Path $programs ($script:DISPLAY_NAME + ".lnk")
+  if (-not (Test-Path $lnkPath)) {
+    $vbsPath = Join-Path $PSScriptRoot "bodian-smtc-bridge.vbs"
+    $icon = "C:\Program Files (x86)\bodian\bodian_pc.exe"
+    $r = [ShortcutAumid]::Create($lnkPath, "wscript.exe", ('"' + $vbsPath + '"'), $PSScriptRoot, $script:MY_AUMID, $icon)
+    Log ("start menu shortcut: " + $r)
+  } else { Log "start menu shortcut already present" }
+} catch { Log ("shortcut ERR: " + $_.Exception.Message) }
 
 # helper to await a WinRT IAsyncOperation from PowerShell 5.1
 $script:asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
@@ -225,15 +328,12 @@ for ($i = 0; $i -lt $script:ITEM_COUNT; $i++) {
   } catch { Log ("playlist item ERR: " + $_.Exception.Message) }
 }
 $script:mp.Source = $script:playlist
-# MediaPlaybackList has no IsLoopingEnabled; looping is handled by MediaPlayer.IsLoopingEnabled
 try { $script:mp.IsLoopingEnabled = $true } catch { }
 $script:mp.Volume = 0
 try { $script:mp.CommandManager.IsEnabled = $true; Log "CommandManager enabled" } catch { Log ("cm ERR: " + $_.Exception.Message) }
 $script:mp.Play()
 
-# ---------- 1b) winmm silent loop ----------
-# Keeps this process "rendering audio" even while the MediaPlayer below is left paused
-# by the user, so the SMTC session stays the current media source.
+# ---------- 2) winmm silent loop ----------
 $silentWav = Join-Path $env:TEMP "bodian_silence_60s.wav"
 try {
   $sr = 8000; $n = $sr * 60
@@ -249,14 +349,12 @@ try {
   $script:player.SoundLocation = $silentWav
   $script:player.Load()
   $script:player.PlayLooping()
-  Log "winmm silent loop running (session stays alive while paused)"
+  Log "winmm silent loop running"
 } catch { Log ("winmm audio ERR: " + $_.Exception.Message) }
 
-# ---------- 2) SMTC session ----------
+# ---------- 3) SMTC session ----------
 $script:smtc = $script:mp.SystemMediaTransportControls
 $script:smtc.IsEnabled = $true
-# IsPlayEnabled/IsPauseEnabled MUST stay true: Windows only treats a session as an
-# active media source if it claims playback capability.
 foreach ($p in @("IsPlayEnabled", "IsPauseEnabled", "IsStopEnabled", "IsNextEnabled", "IsPreviousEnabled")) {
   try { $script:smtc.$p = $true } catch { }
 }
@@ -265,7 +363,7 @@ $script:updater.Type = [Windows.Media.MediaPlaybackType, Windows.Media, ContentT
 $script:updater.Update()
 Log ("smtc ready: " + $script:smtc.GetType().FullName)
 
-# ---------- 3) state ----------
+# ---------- 4) state ----------
 $script:form = $form
 $script:dbPath = Join-Path $env:LOCALAPPDATA "cn.wenyu.bodian\bodian_pc\database\songDB.db"
 $script:lastOrd = -1
@@ -281,19 +379,16 @@ $script:lastPos = -1.0
 $script:lastPosChange = [DateTime]::Now
 $script:status = [Windows.Media.MediaPlaybackStatus, Windows.Media, ContentType = WindowsRuntime]::Stopped
 $script:lastIdx = -1
-$script:lastLoggedIdx = -999
 $script:lastInject = [DateTime]::MinValue
 $script:lastMpState = ""
-$script:ignoreNextPlaying = $false
 
-# ---------- 4) main loop ----------
+# ---------- 5) main loop ----------
 $script:tick = 0
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 800
 $timer.Add_Tick({
   $script:tick++
   try {
-    # ---- current track from Bodian's own database ----
     $row = [BodianBridge]::QueryLatestSong($script:dbPath)
     if ($row) {
       $f = $row.Split([char]1)
@@ -312,8 +407,6 @@ $timer.Add_Tick({
             $script:updater.MusicProperties.Title = $script:curTitle
             $script:updater.MusicProperties.Artist = $script:curArtist
             if ($script:curAlbum -ne "") { $script:updater.MusicProperties.AlbumTitle = $script:curAlbum }
-            # album art: node downloads it (this machine's system TLS is broken) and we
-            # hand SMTC the local file via CreateFromFile
             $pic = ""
             if ($j.albumPic120) { $pic = [string]$j.albumPic120 }
             elseif ($j.albumPic) { $pic = [string]$j.albumPic }
@@ -329,7 +422,7 @@ $timer.Add_Tick({
                 try {
                   $psi = New-Object System.Diagnostics.ProcessStartInfo
                   $psi.FileName = $script:nodePath
-                  $psi.Arguments = "`"$script:dlJs`" `"$picJpg`" `"$cf`""
+                  $psi.Arguments = '"' + $script:dlJs + '" "' + $picJpg + '" "' + $cf + '"'
                   $psi.UseShellExecute = $false
                   $psi.CreateNoWindow = $true
                   $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
@@ -346,7 +439,6 @@ $timer.Add_Tick({
       }
     }
 
-    # ---- position / play state from mpv time-pos ----
     $pos = [BodianBridge]::GetTimePos()
     $now = [DateTime]::Now
     if ($pos -ge 0) {
@@ -369,7 +461,6 @@ $timer.Add_Tick({
       Log ("status " + [int]$newStatus)
     }
 
-    # ---- fight back for our metadata (CommandManager overwrites it) ----
     if ($script:curTitle -ne "") {
       try {
         $script:updater.MusicProperties.Title = $script:curTitle
@@ -379,7 +470,6 @@ $timer.Add_Tick({
       } catch { }
     }
 
-    # ---- timeline so lyrics follow exactly ----
     if ($pos -ge 0 -and $script:curDuration -gt 0) {
       $tlType = [Windows.Media.SystemMediaTransportControlsTimelineProperties, Windows.Media, ContentType = WindowsRuntime]
       $tl = [Activator]::CreateInstance($tlType)
@@ -391,16 +481,14 @@ $timer.Add_Tick({
       $script:smtc.UpdateTimelineProperties($tl)
     }
 
-    # ---- detect transport-button presses via playlist index change ----
     $idx = -1
-    try { $idx = [int]$script:playlist.CurrentItemIndex } catch { Log ("idx read ERR: " + $_.Exception.Message) }
+    try { $idx = [int]$script:playlist.CurrentItemIndex } catch { }
     if ($script:lastIdx -ge 0 -and $idx -ne $script:lastIdx) {
       $delta = ($idx - $script:lastIdx + $script:ITEM_COUNT) % $script:ITEM_COUNT
-      # ignore changes caused by our own injected key echoing back
       if (($now - $script:lastInject).TotalMilliseconds -ge 1500) {
         $vk = 0
-        if ($delta -eq 1) { $vk = 0xB0 }                        # Next
-        elseif ($delta -eq $script:ITEM_COUNT - 1) { $vk = 0xB1 }  # Previous
+        if ($delta -eq 1) { $vk = 0xB0 }
+        elseif ($delta -eq $script:ITEM_COUNT - 1) { $vk = 0xB1 }
         if ($vk -ne 0) {
           $script:lastInject = $now
           [void][BodianBridge]::MediaKey([uint16]$vk)
@@ -408,12 +496,8 @@ $timer.Add_Tick({
         }
       }
     }
-    $script:lastIdx = $idx    # always remember, including the very first sample
+    $script:lastIdx = $idx
 
-    # ---- play / pause ----
-    # CommandManager applies the user's play/pause to our player, so we detect it as a
-    # state change. To avoid ever flipping Bodian's state the wrong way, we only forward
-    # when Bodian is actually in the OPPOSITE state; our own resume is flagged and ignored.
     try {
       $mpState = [string]$script:mp.PlaybackSession.PlaybackState
       if ($mpState -ne $script:lastMpState) {
@@ -421,22 +505,18 @@ $timer.Add_Tick({
         if (($now - $script:lastInject).TotalMilliseconds -ge 1500) {
           if ($mpState -eq "Paused" -and $bodianPlaying) {
             $script:lastInject = $now
-            [void][BodianBridge]::MediaKey([uint16]0xB3)   # VK_MEDIA_PLAY_PAUSE
+            [void][BodianBridge]::MediaKey([uint16]0xB3)
             Log "forwarded play/pause -> pause (bodian was playing)"
           } elseif ($mpState -eq "Playing" -and $script:lastMpState -eq "Paused" -and -not $bodianPlaying) {
             $script:lastInject = $now
-            [void][BodianBridge]::MediaKey([uint16]0xB3)   # VK_MEDIA_PLAY_PAUSE
+            [void][BodianBridge]::MediaKey([uint16]0xB3)
             Log "forwarded play/pause -> play (bodian was paused)"
           }
         }
         $script:lastMpState = $mpState
       }
-      # NOTE: no auto-resume here on purpose. The user's pause must stick, otherwise a
-      # later press of Play would not change the state and could never be detected.
-      # The winmm loop above keeps the session current meanwhile.
     } catch { }
 
-    # ---- apply downloaded album art ----
     if (-not $script:coverApplied -and $script:coverFile -ne "" -and (Test-Path $script:coverFile)) {
       try {
         $sfType = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]

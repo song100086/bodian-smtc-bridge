@@ -1,6 +1,6 @@
 ﻿# 波点音乐 SMTC 桥接 / Bodian SMTC Bridge
 
-给 **波点音乐** （版本1.1.7）桌面客户端补上 Windows **SMTC**（System Media Transport Controls，系统媒体传输控件）媒体会话。
+给 **波点音乐** 桌面客户端补上 Windows **SMTC**（System Media Transport Controls，系统媒体传输控件）媒体会话。
 
 补上之后，**任何读取 SMTC 的软件**都能识别波点正在播放什么：
 
@@ -16,11 +16,6 @@
 
 波点音乐桌面客户端（Flutter + `media_kit`/libmpv）**从不发布 SMTC 媒体会话**：
 音量键弹出的媒体控件里看不到它，任何歌词软件也识别不到它（通常表现为「无可用播放源」）。
-
-## 优势
-
-零编译、零安装：双击 vbs 就跑，不动波点一个字节。
-只读数据库 + 读进程内存，不写、不挂钩、不替换任何文件
 
 SMTC 是 Windows 上媒体信息的**标准通道**，于是本桥接在一个独立进程里**发布一个真实可用的
 SMTC 会话**，把波点正在播放的内容喂给它：
@@ -40,6 +35,7 @@ SMTC 会话**，把波点正在播放的内容喂给它：
 - ✅ 时间轴：精确进度（含暂停、拖动）
 - ✅ 专辑封面缩略图
 - ✅ 传输控制：⏮ 上一首 / ⏭ 下一首 / ▶⏸ 播放暂停
+- ✅ 媒体卡片 / 客户端中显示为 **波点音乐**（设置 AppUserModelID + 注册开始菜单快捷方式），而不是 powershell.exe 或「未知应用」
 - ❌ 跳转进度（seek）：见「已知限制」
 
 ## 安装
@@ -66,6 +62,8 @@ SMTC 会话**，把波点正在播放的内容喂给它：
 
 ## 已知限制
 
+- **媒体卡片的应用名**依赖首次启动时在开始菜单创建的 `波点音乐.lnk`（其 `AppUserModelID` 属性与桥接的 AUMID 一致，shell 靠它解析显示名）。删除该快捷方式后，媒体卡片会退回「未知应用」
+
 - **跳转进度（seek）不可用**：客户端的跳转请求通过 `PlaybackPositionChangeRequested`
   事件下发，而 PowerShell 无法订阅 WinRT 事件（这是「下一首」能实现而「seek」不能的根本原因）；
   并且媒体键没有「定位」功能，执行端还需向波点进程注入 mpv 命令。详见 `DIAGNOSIS.md`
@@ -86,4 +84,4 @@ SMTC 会话**，把波点正在播放的内容喂给它：
 
 MIT
 
-本项目使用 [DeepSeek V4 Flash](https://github.com/deepseek-ai/DeepSeek-V4-Flash) 进行推理。
+
