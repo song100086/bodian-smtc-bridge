@@ -1,6 +1,6 @@
 ﻿# 波点音乐 SMTC 桥接 / Bodian SMTC Bridge
 
-给 **波点音乐** 桌面客户端补上 Windows **SMTC**（System Media Transport Controls，系统媒体传输控件）媒体会话。
+给 **波点音乐** （版本1.1.7）桌面客户端补上 Windows **SMTC**（System Media Transport Controls，系统媒体传输控件）媒体会话。
 
 补上之后，**任何读取 SMTC 的软件**都能识别波点正在播放什么：
 
@@ -80,3 +80,5 @@ SMTC 会话**，把波点正在播放的内容喂给它：
 ## 许可
 
 MIT
+
+本项目使用 [DeepSeek V4 Flash](https://github.com/deepseek-ai/DeepSeek-V4-Flash) 进行推理。
