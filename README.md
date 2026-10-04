@@ -86,7 +86,9 @@ MIT
 
 本项目由deepseek v4 flash主要开发
 
-Bodian Music SMTC Bridge
+## README.en.md
+
+Bodian Music SMTC Bridge English
 
 Give the Bodian Music (波点音乐) desktop client (v1.1.7) a Windows SMTC (System Media Transport Controls) media session.
 
