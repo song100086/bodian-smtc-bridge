@@ -85,3 +85,73 @@ SMTC 会话**，把波点正在播放的内容喂给它：
 MIT
 
 本项目由deepseek v4 flash主要开发
+
+Bodian Music SMTC Bridge
+
+Give the Bodian Music (波点音乐) desktop client (v1.1.7) a Windows SMTC (System Media Transport Controls) media session.
+
+Once it's running, any SMTC-aware software can see what Bodian is playing:
+
+    Windows' built-in media controls (the card that pops up when you press a volume key)
+    Lyricify Fusion (scrolling / desktop / taskbar lyrics)
+    Other taskbar-lyric tools and SMTC utilities
+    The media keys on your keyboard (▶⏸ / ⏭ / ⏮)
+    Discord Rich Presence bridges and similar
+
+    This project is not tied to any specific client — Lyricify Fusion is just one consumer we happened to verify.
+
+Why it's needed
+
+The Bodian Music desktop client (Flutter + media_kit/libmpv) never publishes an SMTC media session: it doesn't appear in the media flyout, and no lyrics app can see it (usually reported as "no available playback source").
+
+SMTC is the standard channel for media information on Windows, so this bridge publishes a real, usable SMTC session in its own process and feeds it what Bodian is actually doing:
+Data	Source
+Track (title / artist / album / duration)	Bodian's own database %LOCALAPPDATA%\cn.wenyu.bodian\bodian_pc\database\songDB.db, table hist_song
+Playback position / pause state	mpv time-pos, read from bodian_pc.exe process memory
+Album art	Cover URL stored in that database (.webp → .jpg)
+Transport control (prev / next / play-pause)	MediaPlayer + a silent playlist + CommandManager; buttons are forwarded to Bodian as media keys
+SMTC capabilities provided
+
+    ✅ The media session itself (so Windows and other clients can "see" Bodian)
+    ✅ Track metadata: title / artist / album
+    ✅ Playback state: playing / paused
+    ✅ Timeline: accurate position (including pause and seeking)
+    ✅ Album art thumbnail
+    ✅ Transport control: ⏮ previous / ⏭ next / ▶⏸ play-pause
+    ✅ Shows up as 波点音乐 in the media card / clients (via AppUserModelID + a Start Menu shortcut), instead of powershell.exe or "unknown app"
+    ❌ Seeking — see Known limitations
+
+Installation
+
+Requirements: Windows 10/11, Windows PowerShell 5.1 (built in), Node.js (only used to download album art; without Node everything else still works, you just get no cover art)
+
+    Put all files from this directory into a single folder — %LOCALAPPDATA%\BodianSmtcBridge\ is recommended
+    Double-click bodian-smtc-bridge.vbs to start it (no window, runs in the background)
+    Open your SMTC client (e.g. Lyricify Fusion) — Bodian's current track should appear
+    Autostart: put a shortcut to bodian-smtc-bridge.vbs into your Startup folder (Win+R → type shell:startup → Enter)
+
+Files
+File	Description
+bodian-smtc-bridge.ps1	Main bridge script (PowerShell 5.1 / STA)
+bodian-smtc-bridge.vbs	Windowless launcher (recommended)
+bodian-smtc-bridge.cmd	Fallback launcher (flashes a console window)
+cover_dl.js	Cover-art downloader (Node)
+verify_session.ps1	Diagnostic tool: print the current SMTC playback source
+DIAGNOSIS.md	Full technical write-up (internals, API details, pitfalls, feasibility analysis)
+Known limitations
+
+    The app name in the media flyout depends on the Start Menu shortcut 波点音乐.lnk, which the bridge creates on first launch (its AppUserModelID property matches the bridge's AUMID, and the shell resolves the display name from it). Delete that shortcut and the flyout falls back to "unknown app".
+    Seeking is not available. A client's seek request is delivered as the PlaybackPositionChangeRequested event, and PowerShell cannot subscribe to WinRT events — the same root cause that makes "next" possible and "seek" impossible. The media keys also have no "seek" function, and the execution side would require injecting an mpv command into the Bodian process. See DIAGNOSIS.md.
+    After a Bodian client update, if lyrics/position stop following, the memory offsets have most likely changed (media_kit_native_event_loop.dll + 0xA1D8, MPContext + 0x328) and need to be re-located. (Currently verified against 1.1.7.)
+    If the system TLS stack is broken (e.g. curl reports SEC_E_NO_CREDENTIALS), SMTC cannot fetch cover art by itself, so the script downloads it with Node instead; on a healthy system both paths work.
+    The script locates sqlite3.dll using the default install path C:\Program Files (x86)\bodian; adjust it if Bodian is installed elsewhere.
+    Verified only against specific Bodian versions — feedback is welcome.
+
+Disclaimer
+
+Unofficial tool, for learning and personal use only. All data is read from the local Bodian client; it does not crack or bypass any membership or copyright restrictions.
+License
+
+MIT
+
+Mainly developed by deepseek v4 flash.
