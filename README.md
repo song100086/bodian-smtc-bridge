@@ -1,6 +1,6 @@
 ﻿# 波点音乐 SMTC 桥接 / Bodian SMTC Bridge
 
-给 **波点音乐** 桌面客户端补上 Windows **SMTC**（System Media Transport Controls，系统媒体传输控件）媒体会话。
+给 **波点音乐**（版本1.1.7） 桌面客户端补上 Windows **SMTC**（System Media Transport Controls，系统媒体传输控件）媒体会话。
 
 补上之后，**任何读取 SMTC 的软件**都能识别波点正在播放什么：
 
@@ -67,7 +67,7 @@ SMTC 会话**，把波点正在播放的内容喂给它：
 - **跳转进度（seek）不可用**：客户端的跳转请求通过 `PlaybackPositionChangeRequested`
   事件下发，而 PowerShell 无法订阅 WinRT 事件（这是「下一首」能实现而「seek」不能的根本原因）；
   并且媒体键没有「定位」功能，执行端还需向波点进程注入 mpv 命令。详见 `DIAGNOSIS.md`
-- **波点客户端升级后**，若歌词/进度不再跟随，多半是内存偏移变了
+- **波点客户端升级后**，若歌词/进度不再跟随，多半是内存偏移变了（当前版本1.1.7）
   （`media_kit_native_event_loop.dll + 0xA1D8`、`MPContext + 0x328`），需要重新定位
 - **系统 TLS 损坏时**（例如 `curl` 报 `SEC_E_NO_CREDENTIALS`），SMTC 自己下载不了封面，
   本脚本改用 Node 下载；正常系统两者皆可
@@ -84,4 +84,4 @@ SMTC 会话**，把波点正在播放的内容喂给它：
 
 MIT
 
-
+本项目由deepseek v4 flash主要开发
